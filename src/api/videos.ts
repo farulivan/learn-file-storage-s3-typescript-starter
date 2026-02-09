@@ -3,8 +3,8 @@ import { rm } from 'fs/promises';
 import { respondWithJSON } from "./json";
 import { BadRequestError, NotFoundError, UserForbiddenError } from './errors';
 import { getBearerToken, validateJWT } from '../auth';
-import { getVideo, updateVideo } from '../db/videos';
-import { uploadVideoToS3 } from '../s3';
+import { getVideo, updateVideo, type Video } from '../db/videos';
+import { generatePresignedURL, uploadVideoToS3 } from '../s3';
 
 import { type ApiConfig } from "../config";
 import type { BunRequest } from "bun";
@@ -53,7 +53,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   const key = `${aspectRatio}/${videoId}.mp4`;
   await uploadVideoToS3(cfg, key, processedFilePath, "video/mp4");
 
-  const videoUrl = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${key}`;
+  const videoUrl = key;
   video.videoURL = videoUrl;
   updateVideo(cfg.db, video);
 
@@ -62,7 +62,7 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
     rm(`${tempFilePath}.processed.mp4`, { force: true }),
   ]);
 
-  return respondWithJSON(200, video);
+  return respondWithJSON(200, dbVideoToSignedVideo(cfg, video));
 }
 
 async function getVideoAspectRatio(inputFilePath: string): Promise<'landscape' | 'portrait' | 'other'> {
@@ -132,4 +132,13 @@ async function processVideoForFastStart(inputFilePath: string) {
   if (exited !== 0) throw new Error(`FFmpeg error: ${stderrText}`);
 
   return outputFilePath;
+}
+
+export function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
+  if (!video.videoURL) return video;
+  const presignedVideoUrl = generatePresignedURL(cfg, video.videoURL, 5 * 60);
+  return {
+    ...video,
+    videoURL: presignedVideoUrl,
+  };
 }
